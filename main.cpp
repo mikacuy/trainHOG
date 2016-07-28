@@ -66,6 +66,7 @@
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/ml/ml.hpp>
+#include <string>
 
 #define SVMLIGHT 1
 #define LIBSVM 2
@@ -89,6 +90,10 @@ using namespace cv;
 static string posSamplesDir = "pos/";
 // Directory containing negative sample images
 static string negSamplesDir = "neg/";
+//Directory containing positive test images
+static string testPosImagesDir = "test_pos/";
+//Directory containing negative test images
+static string testNegImagesDir = "test_neg/";
 // Set the file to write the features to
 static string featuresFile = "genfiles/features.dat";
 // Set the file to write the SVM model to
@@ -212,6 +217,7 @@ static void calculateFeaturesFromInput(const string& imageFilename, vector<float
      * you either do not have a current openCV version (>2.0) 
      * or the linking order is incorrect, try g++ -o openCVHogTrainer main.cpp `pkg-config --cflags --libs opencv`
      */
+
     Mat imageData = imread(imageFilename, IMREAD_GRAYSCALE);
     if (imageData.empty()) {
         featureVector.clear();
@@ -271,6 +277,44 @@ static void showDetections(const vector<Rect>& found, Mat& imageData) {
  * Detector quality must be determined using an independent test set.
  * @param hog
  */
+static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, const std::vector<string>& testPosFileNames, const std::vector<string>& testNegFileNames){
+    unsigned int truePositives =0;
+    unsigned int falsePositives =0;
+    unsigned int falseNegatives =0;
+    unsigned int trueNegatives =0;
+    vector<Point> foundDetection;
+    //Walk over positive test samples
+    for (vector<string>::const_iterator testPosIterator = testPosFileNames.begin(); testPosIterator != testPosFileNames.end(); ++testPosIterator) {
+        const Mat imageData = imread(*testPosIterator, IMREAD_GRAYSCALE);
+        hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
+        if (foundDetection.size() > 0) {
+            ++truePositives;
+            falseNegatives += foundDetection.size() - 1;
+        } else {
+            ++falseNegatives;
+            //print file name of the error
+            const char *error= testPosIterator->c_str();    
+            printf("Failed on %s\n", error);
+        }
+    }
+
+    //Walk over negative samples
+    for (vector<string>::const_iterator testNegIterator = testNegFileNames.begin(); testNegIterator != testNegFileNames.end(); ++testNegIterator) {
+        const Mat imageData = imread(*testNegIterator, IMREAD_GRAYSCALE);
+        hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
+        if (foundDetection.size() > 0) {
+            falsePositives += foundDetection.size();
+            const char *error_neg= testNegIterator->c_str();    
+            printf("Failed on %s\n", error_neg);
+        } else {
+            ++trueNegatives;
+        }        
+    }
+
+     printf("Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n", truePositives, trueNegatives, falsePositives, falseNegatives);
+}
+
+
 static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThreshold, const vector<string>& posFileNames, const vector<string>& negFileNames) {
     unsigned int truePositives = 0;
     unsigned int trueNegatives = 0;
@@ -331,15 +375,20 @@ int main(int argc, char** argv) {
     // Get the files to train from somewhere
     static vector<string> positiveTrainingImages;
     static vector<string> negativeTrainingImages;
+    static vector<string> testPosImagesSet;
+    static vector<string> testNegImageSet;
     static vector<string> validExtensions;
     validExtensions.push_back("jpg");
     validExtensions.push_back("png");
     validExtensions.push_back("ppm");
-    // </editor-fold>
+    validExtensions.push_back("jpeg");
+// </editor-fold>
 
     // <editor-fold defaultstate="collapsed" desc="Read image files">
     getFilesInDirectory(posSamplesDir, positiveTrainingImages, validExtensions);
     getFilesInDirectory(negSamplesDir, negativeTrainingImages, validExtensions);
+    getFilesInDirectory(testPosImagesDir, testPosImagesSet, validExtensions);
+    getFilesInDirectory(testNegImagesDir, testNegImageSet, validExtensions);
     /// Retrieve the descriptor vectors from the samples
     unsigned long overallSamples = positiveTrainingImages.size() + negativeTrainingImages.size();
     // </editor-fold>
@@ -437,6 +486,7 @@ int main(int argc, char** argv) {
 	
     printf("Testing training phase using training set as test set (just to check if training is ok - no detection quality conclusion with this!)\n");
     detectTrainingSetTest(hog, hitThreshold, positiveTrainingImages, negativeTrainingImages);
+    detectTestSet(hog, hitThreshold, testPosImagesSet, testNegImageSet);
 
     printf("Testing custom detection using camera\n");
     VideoCapture cap(-1); // open the default camera
