@@ -21,16 +21,19 @@ static string posSamplesDir = "pos/";
 static string negSamplesWaterDir = "neg/water/";
 static string negSamplesCoralsDir = "neg/corals/";
 static string negSamplesAnimalsDir = "neg/sea_creatures/";
-static string testPosImagesDir = "pos_test_small/";
-static string testNegImagesDir = "neg_test_small/";
+static string testPosImagesDir = "test_pos/";
+static string testNegImagesDir = "test_neg/";
 static string featuresFile = "genfiles/features_trainingSet2.dat";
 static string svmModelFile = "genfiles/svmlightmodel_trainingSet2.dat";
 static string descriptorVectorFile = "genfiles/descriptorvector_trainingSet2.dat";
 static string cvHOGFile = "genfiles/cvHOGClassifier_trainingSet2.yaml";
 static string foundImagesDir ="found/";
 
-static const Size trainingPadding = Size(0, 0);
-static const Size winStride = Size(8, 8);
+static const Size trainingPadding1 = Size(0, 0);
+static const Size winStride1 = Size(8, 8);
+float posLabel = 1.0;
+float negLabel = -1.0;
+
 
 //extend CvSVM to get access to weights
 class mySVM : public CvSVM
@@ -120,7 +123,7 @@ static void getFilesInDirectory(const string& dirName, vector<string>& fileNames
             // Check if extension is matching the wanted ones
             string tempExt = toLowerCase(string(ep->d_name).substr(extensionLocation + 1));
             if (find(validExtensions.begin(), validExtensions.end(), tempExt) != validExtensions.end()) {
-                printf("Found matching data file '%s'\n", ep->d_name);
+                //printf("Found matching data file '%s'\n", ep->d_name);
                 fileNames.push_back((string) dirName + ep->d_name);
             } else {
                 printf("Found file does not match required file type, skipping: '%s'\n", ep->d_name);
@@ -148,7 +151,7 @@ static void calculateFeaturesFromInput(const string& imageFilename, vector<float
         return;
     }
     vector<Point> locations;
-    hog.compute(imageData, featureVector, winStride, trainingPadding, locations);
+    hog.compute(imageData, featureVector, winStride1, trainingPadding1, locations);
     imageData.release(); // Release the image again after features are extracted
 }
 
@@ -177,7 +180,50 @@ static void showDetections(const vector<Rect>& found, Mat& imageData) {
     }
 }
 
-static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, const std::vector<string>& testPosFileNames, const std::vector<string>& testNegFileNames){
+static bool filterDetections(const HOGDescriptor& hog, Mat& imageData, Rect rect, mySVM& SVM){
+    try{
+        cv::Mat padded;
+        int padding = 128;
+        padded.create(imageData.rows + 2*padding, imageData.cols + 2*padding, imageData.type());
+        padded.setTo(cv::Scalar::all(0));
+
+        imageData.copyTo(padded(Rect(padding, padding, imageData.cols, imageData.rows)));
+        imwrite("found/features/padded.jpg", padded);
+
+        Mat crop= padded(Rect(rect.x+128,rect.y+128,rect.width,rect.height));
+        cv::resize(crop,crop,Size(64,128));
+        imshow("Cropped",crop);
+        vector<float> featureVector;
+        featureVector.clear();
+        vector<Point> locations;
+        Mat feature_matrix;
+        int dims=3780;
+
+        hog.compute(crop, featureVector,winStride1, trainingPadding1, locations);
+        if(featureVector.size()==dims){
+            feature_matrix= Mat(1,dims,CV_32FC1,featureVector.data(),true); 
+            imwrite("found/features/feature.jpg", crop);
+        }
+        else{
+            printf("<filterDetection> Error in feature detection\n" );
+        }
+
+        int result=SVM.predict(feature_matrix);
+        //printf("SVM Output: %f\n", SVM.predict(feature_matrix));
+        if(result==posLabel){
+            return true;
+        }
+        else{
+            return false;
+        }
+    }
+    catch(int e){
+        printf("<filterDetection> Error caught.\n");
+        return -1;
+    }
+}
+
+static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, const std::vector<string>& testPosFileNames, const std::vector<string>& testNegFileNames, vector<int>& results, Size winStride, Size padding, double scale, mySVM& SVM){
     unsigned int truePositives =0;
     unsigned int falsePositives =0;
     unsigned int falseNegatives =0;
@@ -190,18 +236,27 @@ static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, c
         Mat imageData = imread(*testPosIterator, IMREAD_GRAYSCALE);
         //Mat imageData_rotated= rotate(imageData,90);
         const char *file_name= testPosIterator->c_str();
-        Size padding(Size(8, 8));
-        Size winStride(Size(8, 8));
-        hog.detectMultiScale(imageData, foundDetectionVertical, hitThreshold, winStride, padding);
+        vector<Rect> filtered_foundDetection;
+        hog.detectMultiScale(imageData, foundDetectionVertical, hitThreshold, winStride, padding, scale);
+        //printf("Size of positive unfiltered vectors:%lu\n", sizeof(foundDetectionVertical)/sizeof(foundDetectionVertical[0]) );
+        for (vector<Rect>::const_iterator rectIterator = foundDetectionVertical.begin(); rectIterator != foundDetectionVertical.end(); ++rectIterator){
+            if(filterDetections(hog,imageData,*rectIterator, SVM)){
+                //printf("Feature added\n");
+                filtered_foundDetection.push_back(*rectIterator);
+            }
+            else{
+                //printf("Feature deleted\n");
+            }
+        }
         //hog.detectMultiScale(imageData_rotated,foundDetectionHorizontal, hitThreshold, winStride, padding);
         // if ((foundDetectionVertical.size() + foundDetectionHorizontal.size()) >0) {
         //    ++truePositives;
-        if(foundDetectionVertical.size()>0){
+        //printf("Size of positive filtered vectors:%lu\n", sizeof(filtered_foundDetection)/sizeof(filtered_foundDetection[0]) );
+        if(filtered_foundDetection.size()>0){
             ++truePositives;
-            showDetections(foundDetectionVertical, imageData);
+            showDetections(filtered_foundDetection, imageData);
             imwrite(foundImagesDir+file_name, imageData);
-        }
-            
+        }  
             // else if(foundDetectionHorizontal.size()>0){
             //     imageData=rotate(imageData,90);
             //     showDetections(foundDetectionHorizontal, imageData);
@@ -220,15 +275,25 @@ static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, c
     for (vector<string>::const_iterator testNegIterator = testNegFileNames.begin(); testNegIterator != testNegFileNames.end(); ++testNegIterator) {
         Mat imageData = imread(*testNegIterator, IMREAD_GRAYSCALE);
         //Mat imageData_rotated= rotate(imageData,90);
-        const char *file_name= testNegIterator->c_str();          
-        Size padding(Size(8, 8));
-        Size winStride(Size(8, 8));
-        hog.detectMultiScale(imageData, foundDetectionVertical, hitThreshold, winStride, padding);
+        const char *file_name= testNegIterator->c_str();
+        vector<Rect> filtered_foundDetection;          
+        hog.detectMultiScale(imageData, foundDetectionVertical, hitThreshold, winStride, padding, scale);
+        //printf("Size of negative unfiltered vectors:%lu\n", sizeof(foundDetectionVertical)/sizeof(foundDetectionVertical[0]) );
+        for (vector<Rect>::const_iterator rectIterator = foundDetectionVertical.begin(); rectIterator != foundDetectionVertical.end(); ++rectIterator){
+            if(filterDetections(hog,imageData,*rectIterator, SVM)){
+                filtered_foundDetection.push_back(*rectIterator);
+                //printf("Feature added\n");
+            }
+            else{
+                //printf("Feature deleted\n");
+            }
+        }
+        //printf("Size of negative filtered vectors:%lu\n", sizeof(filtered_foundDetection)/sizeof(filtered_foundDetection[0]));
         //hog.detectMultiScale(imageData_rotated,foundDetectionHorizontal, hitThreshold, winStride, padding);  
         //if ((foundDetectionVertical.size() + foundDetectionHorizontal.size()) >0) {
         //    ++falsePositives; //+= foundDetection.size();
-        if(foundDetectionVertical.size()>0){
-            showDetections(foundDetectionVertical, imageData);
+        if(filtered_foundDetection.size()>0){
+            showDetections(filtered_foundDetection, imageData);
             ++falsePositives;
             imwrite(foundImagesDir+file_name, imageData);
             printf("Failed on %s\n", file_name);
@@ -245,10 +310,14 @@ static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, c
             ++trueNegatives;
         }        
     }
+    results[0]=truePositives;
+    results[1]=trueNegatives;
+    results[2]=falsePositives;
+    results[3]=falseNegatives;    
      printf("<HOG> Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n", truePositives, trueNegatives, falsePositives, falseNegatives);
 }
 
-static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThreshold, const vector<string>& posFileNames, const vector<string>& negFileNames) {
+static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThreshold, const vector<string>& posFileNames, const vector<string>& negFileNames, vector<int>& results) {
     unsigned int truePositives = 0;
     unsigned int trueNegatives = 0;
     unsigned int falsePositives = 0;
@@ -257,7 +326,7 @@ static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThre
     // Walk over positive training samples, generate images and detect
     for (vector<string>::const_iterator posTrainingIterator = posFileNames.begin(); posTrainingIterator != posFileNames.end(); ++posTrainingIterator) {
         const Mat imageData = imread(*posTrainingIterator, IMREAD_GRAYSCALE);
-        hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
+        hog.detect(imageData, foundDetection, hitThreshold, winStride1, trainingPadding1);
         if (foundDetection.size() > 0) {
             ++truePositives;
             falseNegatives += foundDetection.size() - 1;
@@ -268,36 +337,52 @@ static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThre
     // Walk over negative training samples, generate images and detect
     for (vector<string>::const_iterator negTrainingIterator = negFileNames.begin(); negTrainingIterator != negFileNames.end(); ++negTrainingIterator) {
         const Mat imageData = imread(*negTrainingIterator, IMREAD_GRAYSCALE);
-        hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
+        hog.detect(imageData, foundDetection, hitThreshold, winStride1, trainingPadding1);
         if (foundDetection.size() > 0) {
             falsePositives += foundDetection.size();
         } else {
             ++trueNegatives;
         }        
     }
+    results[0]=truePositives;
+    results[1]=trueNegatives;
+    results[2]=falsePositives;
+    results[3]=falseNegatives;
     printf("<HOG> Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n", truePositives, trueNegatives, falsePositives, falseNegatives);
 }
 
 static void detectTest(const HOGDescriptor& hog, const double hitThreshold, Mat& imageData) {
     vector<Rect> found_Vertical;
-    vector<Rect> found_Horizontal;
-    Mat imageData_rotated;
-    imageData_rotated=rotate(imageData,90);
+    //vector<Rect> found_Horizontal;
+    //Mat imageData_rotated;
+    //imageData_rotated=rotate(imageData,90);
     Size padding(Size(8, 8));
     Size winStride(Size(8, 8));
-    hog.detectMultiScale(imageData, found_Vertical, hitThreshold, winStride, padding);
-    hog.detectMultiScale(imageData_rotated,found_Horizontal, hitThreshold, winStride, padding);
+    hog.detectMultiScale(imageData, found_Vertical, hitThreshold, winStride, padding,1.5);
+    //hog.detectMultiScale(imageData_rotated,found_Horizontal, hitThreshold, winStride, padding);
     if(found_Vertical.size()>0){
         showDetections(found_Vertical, imageData);
     }
 
-    if(found_Horizontal.size()){
-        imageData=rotate(imageData,90);
-        showDetections(found_Horizontal, imageData);
-        imageData=rotate(imageData,270);
-    } 
+    // if(found_Horizontal.size()){
+    //     imageData=rotate(imageData,90);
+    //     showDetections(found_Horizontal, imageData);
+    //     imageData=rotate(imageData,270);
+    // } 
 }
 
+static void outputToFile(vector<int> trainingResults, vector<int> testResults, double hitThreshold, float cValue, float weight, Size winStride, Size padding, double scale ){
+    ofstream myfile;
+    myfile.open("genfiles/hog/detectMultiscale_plusSVM_1.txt");
+    myfile<<"Different HOG results with varying hitThreshold and fixed C Value and class weights.\n";
+    myfile<<"With an additional SVM layer after detectMultiscale.\n";
+    myfile<<"C Value:\t"<<cValue<<"\nWeights: \t"<<weight<<"\t"<<(1-weight)<<"\nHit Threshold: \t"<<hitThreshold<<"\n\n";
+    myfile<<"winStride:\t"<<winStride.height<<"\t"<<winStride.width<<"\nPadding: \t"<<padding.height<<"\t"<<padding.width<<"\nScale: \t\t"<<scale<<"\n\n";
+    myfile<<"Training Results:\n\tTrue Positives: "<<trainingResults[0]<<"\n\tTrue Negatives: "<<trainingResults[1]<<"\n\tFalse Positives: "<<trainingResults[2]<<"\n\tFalse Negative: "<<trainingResults[3]<<"\n\n";
+    myfile<<"Test Results:\n\tTrue Positives: "<<testResults[0]<<"\n\tTrue Negatives: "<<testResults[1]<<"\n\tFalse Positives: "<<testResults[2]<<"\n\tFalse Negative: "<<testResults[3]<<"\n\n";
+    printf("%s\n", "File Outputed" );
+    myfile.close();
+}
 
 int main(int argc, char** argv) {
 
@@ -334,10 +419,10 @@ int main(int argc, char** argv) {
     setlocale(LC_NUMERIC,"C");
     setlocale(LC_ALL, "POSIX");
 
-    float posLabel = 1.0;
-    float negLabel = -1.0;
     cv::Mat cSvmLabels;
     int dims=3780;
+    float c=0.08;
+
     //Feature Matrix
     cv::Mat cSvmTrainingData;
 
@@ -347,7 +432,7 @@ int main(int argc, char** argv) {
 	params.svm_type    = CvSVM::C_SVC;
 	params.kernel_type = CvSVM::LINEAR;
 	params.term_crit   = cvTermCriteria(CV_TERMCRIT_ITER, 100, 1e-6);
-	params.C = 0.08;
+	params.C = c;
 	params.class_weights = &weight;
 	
    
@@ -381,7 +466,7 @@ int main(int argc, char** argv) {
 	printf("%d:%s\n",j,"negative features appended." );
 	printf("%d\n",negativeCount );
 
- 	mySVM SVM;
+    mySVM SVM;
     SVM.train(cSvmTrainingData, cSvmLabels, Mat(), Mat(), params);
 
 	//Test SVM Model alone without HOG detectMultiscale
@@ -391,66 +476,90 @@ int main(int argc, char** argv) {
     unsigned int trueNegatives =0;
     float result=0;
 
-    for (vector<string>::const_iterator posTestIterator = testPosImagesSet.begin(); posTestIterator != testPosImagesSet.end(); ++posTestIterator){
-    	vector<float> featureVector;
-    	Mat feature_matrix;
-    	const char *file_name= posTestIterator->c_str();
+ //    for (vector<string>::const_iterator posTestIterator = testPosImagesSet.begin(); posTestIterator != testPosImagesSet.end(); ++posTestIterator){
+ //    	vector<float> featureVector;
+ //    	Mat feature_matrix;
+ //    	const char *file_name= posTestIterator->c_str();
 
-    	calculateFeaturesFromInput(*posTestIterator, featureVector, hog);
-		if(featureVector.size()==dims){
-			feature_matrix= Mat(1,dims,CV_32FC1,featureVector.data(),true);	
-		}
-		else{
-			printf("Error in feature detection.\n");
-		}
+ //    	calculateFeaturesFromInput(*posTestIterator, featureVector, hog);
+	// 	if(featureVector.size()==dims){
+	// 		feature_matrix= Mat(1,dims,CV_32FC1,featureVector.data(),true);	
+	// 	}
+	// 	else{
+	// 		printf("Error in feature detection.\n");
+	// 	}
 
-    	result=SVM.predict(feature_matrix);
-    	if (result==posLabel){
-    		++truePositives;
-    	}
-    	else if (result==negLabel){
-    		++falseNegatives;
-    		printf("Failed on %s\n", file_name);
-    	}
-    	else{
-    		printf("Error in prediction.\n");
-    	}
-	}
+ //    	result=SVM.predict(feature_matrix);
+ //    	if (result==posLabel){
+ //    		++truePositives;
+ //    	}
+ //    	else if (result==negLabel){
+ //    		++falseNegatives;
+ //    		printf("Failed on %s\n", file_name);
+ //    	}
+ //    	else{
+ //    		printf("Error in prediction.\n");
+ //    	}
+	// }
 
-	for (vector<string>::const_iterator negTestIterator = testNegImagesSet.begin(); negTestIterator != testNegImagesSet.end(); ++negTestIterator){
-    	vector<float> featureVector;
-    	Mat feature_matrix;
-    	const char *file_name= negTestIterator->c_str();
+	// for (vector<string>::const_iterator negTestIterator = testNegImagesSet.begin(); negTestIterator != testNegImagesSet.end(); ++negTestIterator){
+ //    	vector<float> featureVector;
+ //    	Mat feature_matrix;
+ //    	const char *file_name= negTestIterator->c_str();
 
-    	calculateFeaturesFromInput(*negTestIterator, featureVector, hog);
-    	if(featureVector.size()==dims){
-			feature_matrix= Mat(1,dims,CV_32FC1,featureVector.data(),true);	
-		}
-		else{
-			printf("Error in feature detection.\n");
-		}
-    	result=SVM.predict(feature_matrix,false);
-    	if (result==posLabel){
-    		++falsePositives;
-    		printf("Failed on %s\n", file_name);
-    	}
-    	else if (result==negLabel){
-    		++trueNegatives;
-    	}
-    	else{
-    		printf("Error in prediction.\n");
-    	}
-	}
-	printf("Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n", truePositives, trueNegatives, falsePositives, falseNegatives);
+ //    	calculateFeaturesFromInput(*negTestIterator, featureVector, hog);
+ //    	if(featureVector.size()==dims){
+	// 		feature_matrix= Mat(1,dims,CV_32FC1,featureVector.data(),true);	
+	// 	}
+	// 	else{
+	// 		printf("Error in feature detection.\n");
+	// 	}
+ //    	result=SVM.predict(feature_matrix,false);
+ //    	if (result==posLabel){
+ //    		++falsePositives;
+ //    		printf("Failed on %s\n", file_name);
+ //    	}
+ //    	else if (result==negLabel){
+ //    		++trueNegatives;
+ //    	}
+ //    	else{
+ //    		printf("Error in prediction.\n");
+ //    	}
+	// }
+	// printf("Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n", truePositives, trueNegatives, falsePositives, falseNegatives);
 
  	SVM.save("genfiles/cvSVM/svmModel2.yaml");
 
     vector<float> primal= SVM.getWeightVector(dims);
     hog.setSVMDetector(primal);
-    const double hitThreshold=-1;
+    const double hitThreshold=-1.03;
+    Size winStride(Size(16,16));
+    Size padding(Size(8,8));
+    double scale= 1.5;
+
+    vector<int> trainingResults (4);
+    vector<int> testResults (4);
 
     printf("<HOG> Testing training phase using training set as test set.\n");
-    detectTrainingSetTest(hog, hitThreshold, positiveTrainingImages, negativeTrainingImages);
-    detectTestSet(hog, hitThreshold, testPosImagesSet, testNegImagesSet);
+    detectTrainingSetTest(hog, hitThreshold, positiveTrainingImages, negativeTrainingImages,trainingResults);
+    detectTestSet(hog, hitThreshold, testPosImagesSet, testNegImagesSet,testResults, winStride, padding, scale, SVM);
+    outputToFile(trainingResults,testResults,hitThreshold,c,0.7,winStride, padding, scale);
+
+    // printf("Testing custom detection using camera\n");
+    // VideoCapture cap(-1); // open the default camera
+    // if(!cap.isOpened()) { // check if we succeeded
+    //     printf("Error opening camera!\n");
+    //     return EXIT_FAILURE;
+    // }
+    // Mat testImage;
+    // while ((cvWaitKey(10) & 255) != 27) {
+    //     cap >> testImage; // get a new frame from camera
+    //     cvtColor(testImage, testImage, CV_BGR2GRAY); // Work on grayscale images as trained
+    //     detectTest(hog, hitThreshold, testImage);
+    //     imshow("HOG custom detection", testImage);
+    // }
+    // // </editor-fold>
+
+    // return EXIT_SUCCESS;
 
 }
