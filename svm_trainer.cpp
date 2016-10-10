@@ -17,16 +17,16 @@ using namespace std;
 using namespace cv;
 
 
-static string posSamplesDir = "pos/";
+static string posSamplesNormalDir = "pos/normal/";
+static string posSamplesIlluminationDir = "pos/illumination/";
+
 static string negSamplesWaterDir = "neg/water/";
 static string negSamplesCoralsDir = "neg/corals/";
 static string negSamplesAnimalsDir = "neg/sea_creatures/";
+static string negSamplesHardNegativeDir = "neg/hard_negative/";
 static string testPosImagesDir = "pos_test_small/";
 static string testNegImagesDir = "neg_test_small/";
-static string featuresFile = "genfiles/features_trainingSet2.dat";
-static string svmModelFile = "genfiles/svmlightmodel_trainingSet2.dat";
-static string descriptorVectorFile = "genfiles/descriptorvector_trainingSet2.dat";
-static string cvHOGFile = "genfiles/cvHOGClassifier_trainingSet2.yaml";
+
 static string foundImagesDir ="found/";
 
 static const Size trainingPadding = Size(0, 0);
@@ -106,13 +106,6 @@ static void calculateFeaturesFromInput(const string& imageFilename, vector<float
     imageData.release(); // Release the image again after features are extracted
 }
 
-static void showDetections(const vector<Point>& found, Mat& imageData) {
-    size_t i, j;
-    for (i = 0; i < found.size(); ++i) {
-        Point r = found[i];
-       rectangle(imageData, Rect(r.x-16, r.y-32, 32, 64), Scalar(64, 255, 64), 3);
-    }
-}
 
 
 
@@ -131,10 +124,15 @@ int main(int argc, char** argv) {
     validExtensions.push_back("ppm");
     validExtensions.push_back("jpeg");
 
-    getFilesInDirectory(posSamplesDir, positiveTrainingImages, validExtensions);
+    getFilesInDirectory(posSamplesNormalDir, positiveTrainingImages, validExtensions);
+    getFilesInDirectory(posSamplesIlluminationDir, positiveTrainingImages, validExtensions);
+
+
     getFilesInDirectory(negSamplesWaterDir, negativeTrainingImages, validExtensions);
     getFilesInDirectory(negSamplesCoralsDir, negativeTrainingImages,validExtensions);
     getFilesInDirectory(negSamplesAnimalsDir, negativeTrainingImages, validExtensions);
+    //getFilesInDirectory(negSamplesHardNegativeDir, negativeTrainingImages, validExtensions);
+
     getFilesInDirectory(testPosImagesDir, testPosImagesSet, validExtensions);
     getFilesInDirectory(testNegImagesDir, testNegImagesSet, validExtensions);
     /// Retrieve the descriptor vectors from the samples
@@ -200,23 +198,23 @@ int main(int argc, char** argv) {
 
 	//for outputing to a file
 	ofstream myfile;
-  	myfile.open ("genfiles/cvSVM/Cvalues_results5.txt");
+  	myfile.open ("genfiles/cvSVM/withIlluminations2.txt");
   	myfile << "Different results with varying C values in SVM model.\n";
   	myfile << "Class weights: 0.7, 0.3.\n\n";
  	static vector<float> cValues;
  	cValues.push_back(100.0);
  	cValues.push_back(1.0);
+ 	cValues.push_back(0.8);
+ 	cValues.push_back(0.5);
  	cValues.push_back(0.2);
- 	cValues.push_back(0.15);
  	cValues.push_back(0.1);
+ 	cValues.push_back(0.095);
  	cValues.push_back(0.09);
+ 	cValues.push_back(0.085);
  	cValues.push_back(0.08);
- 	cValues.push_back(0.075);
- 	cValues.push_back(0.07);
- 	cValues.push_back(0.065);
- 	cValues.push_back(0.05);
- 	cValues.push_back(0.04);
- 	cValues.push_back(0.02);
+ 	cValues.push_back(0.06);
+ 	cValues.push_back(0.03);
+ 	cValues.push_back(0.01);
 
 
  	CvSVM SVM;
@@ -289,7 +287,7 @@ int main(int argc, char** argv) {
 		//myfile.write("Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n\n", truePositives, trueNegatives, falsePositives, falseNegatives); 
  	}
 
- 	SVM.save("genfiles/cvSVM/svmModel2.yaml");
+ 	//SVM.save("genfiles/cvSVM/svmModel2.yaml");
  	myfile.close();
 
 }

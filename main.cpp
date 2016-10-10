@@ -95,13 +95,15 @@ static string testPosImagesDir = "test_pos/";
 //Directory containing negative test images
 static string testNegImagesDir = "test_neg/";
 // Set the file to write the features to
-static string featuresFile = "genfiles/features.dat";
+static string featuresFile = "genfiles/features_trainingSet2.dat";
 // Set the file to write the SVM model to
-static string svmModelFile = "genfiles/svmlightmodel.dat";
+static string svmModelFile = "genfiles/svmlightmodel_trainingSet2.dat";
 // Set the file to write the resulting detecting descriptor vector to
-static string descriptorVectorFile = "genfiles/descriptorvector.dat";
+static string descriptorVectorFile = "genfiles/descriptorvector_trainingSet2.dat";
 // Set the file to write the resulting opencv hog classifier as YAML file
-static string cvHOGFile = "genfiles/cvHOGClassifier.yaml";
+static string cvHOGFile = "genfiles/cvHOGClassifier_trainingSet2.yaml";
+//save images with bounding box
+static string foundImagesDir ="found/";
 
 // HOG parameters for training that for some reason are not included in the HOG class
 static const Size trainingPadding = Size(0, 0);
@@ -115,8 +117,7 @@ static string toLowerCase(const string& in) {
     string t;
     for (string::const_iterator i = in.begin(); i != in.end(); ++i) {
         t += tolower(*i);
-    }
-    return t;
+    } return t;
 }
 
 static void storeCursor(void) {
@@ -125,6 +126,19 @@ static void storeCursor(void) {
 
 static void resetCursor(void) {
     printf("\033[u");
+}
+
+//function to rotate an image
+static Mat rotate(Mat src, double angle)
+{
+    Mat dst;
+    Point2f center(src.cols/2.0, src.rows/2.0);    
+    Mat rot = getRotationMatrix2D(center, angle, 1.0);
+    cv::Rect bbox = cv::RotatedRect(center,src.size(), angle).boundingRect();
+    rot.at<double>(0,2) += bbox.width/2.0 - center.x;
+    rot.at<double>(1,2) += bbox.height/2.0 - center.y;
+    warpAffine(src, dst, rot, bbox.size());
+    return dst;
 }
 
 /**
@@ -238,14 +252,14 @@ static void calculateFeaturesFromInput(const string& imageFilename, vector<float
 /**
  * Shows the detections in the image
  * @param found vector containing valid detection rectangles
- * @param imageData the image in which the detections are drawn
+ * @param imageData the image in which the detections are drawn 
  */
 static void showDetections(const vector<Point>& found, Mat& imageData) {
     size_t i, j;
     for (i = 0; i < found.size(); ++i) {
         Point r = found[i];
         // Rect_(_Tp _x, _Tp _y, _Tp _width, _Tp _height);
-        rectangle(imageData, Rect(r.x-16, r.y-32, 32, 64), Scalar(64, 255, 64), 3);
+       rectangle(imageData, Rect(r.x-16, r.y-32, 32, 64), Scalar(64, 255, 64), 3);
     }
 }
 
@@ -282,35 +296,61 @@ static void detectTestSet(const HOGDescriptor& hog, const double hitThreshold, c
     unsigned int falsePositives =0;
     unsigned int falseNegatives =0;
     unsigned int trueNegatives =0;
-    vector<Point> foundDetection;
+    vector<Rect> foundDetectionVertical;
+    vector<Rect> foundDetectionHorizontal;
+
     //Walk over positive test samples
     for (vector<string>::const_iterator testPosIterator = testPosFileNames.begin(); testPosIterator != testPosFileNames.end(); ++testPosIterator) {
-        const Mat imageData = imread(*testPosIterator, IMREAD_GRAYSCALE);
-        hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
-        if (foundDetection.size() > 0) {
+        Mat imageData = imread(*testPosIterator, IMREAD_GRAYSCALE);
+        Mat imageData_rotated= rotate(imageData,90);
+        const char *file_name= testPosIterator->c_str();
+        Size padding(Size(8, 8));
+        Size winStride(Size(8, 8));
+        hog.detectMultiScale(imageData, foundDetectionVertical, hitThreshold, winStride, padding);
+        hog.detectMultiScale(imageData_rotated,foundDetectionHorizontal, hitThreshold, winStride, padding);
+        if ((foundDetectionVertical.size() + foundDetectionHorizontal.size()) >0) {
             ++truePositives;
-            falseNegatives += foundDetection.size() - 1;
+            if(foundDetectionVertical.size()>0){
+                showDetections(foundDetectionVertical, imageData);
+            }
+            else if(foundDetectionHorizontal.size()>0){
+                imageData=rotate(imageData,90);
+                showDetections(foundDetectionHorizontal, imageData);
+                imageData=rotate(imageData,270);
+            }
+            imwrite(foundImagesDir+file_name, imageData);
+            //falseNegatives += foundDetection.size() - 1;
         } else {
             ++falseNegatives;
             //print file name of the error
-            const char *error= testPosIterator->c_str();    
-            printf("Failed on %s\n", error);
+            printf("Failed on %s\n", file_name);
         }
-    }
-
-    //Walk over negative samples
+    } 
+    // //Walk over negative samples
     for (vector<string>::const_iterator testNegIterator = testNegFileNames.begin(); testNegIterator != testNegFileNames.end(); ++testNegIterator) {
-        const Mat imageData = imread(*testNegIterator, IMREAD_GRAYSCALE);
-        hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
-        if (foundDetection.size() > 0) {
-            falsePositives += foundDetection.size();
-            const char *error_neg= testNegIterator->c_str();    
-            printf("Failed on %s\n", error_neg);
+        Mat imageData = imread(*testNegIterator, IMREAD_GRAYSCALE);
+        Mat imageData_rotated= rotate(imageData,90);
+        const char *file_name= testNegIterator->c_str();          
+        Size padding(Size(8, 8));
+        Size winStride(Size(8, 8));
+        hog.detectMultiScale(imageData, foundDetectionVertical, hitThreshold, winStride, padding);
+        hog.detectMultiScale(imageData_rotated,foundDetectionHorizontal, hitThreshold, winStride, padding);  
+        if ((foundDetectionVertical.size() + foundDetectionHorizontal.size()) >0) {
+            ++falsePositives; //+= foundDetection.size();
+            if(foundDetectionVertical.size()>0){
+                showDetections(foundDetectionVertical, imageData);
+            }
+            else if(foundDetectionHorizontal.size()>0){
+                imageData=rotate(imageData,90);
+                showDetections(foundDetectionHorizontal, imageData);
+                imageData=rotate(imageData,270);
+            }
+            imwrite(foundImagesDir+file_name, imageData);
+            printf("Failed on %s\n", file_name);
         } else {
             ++trueNegatives;
         }        
     }
-
      printf("Results:\n\tTrue Positives: %u\n\tTrue Negatives: %u\n\tFalse Positives: %u\n\tFalse Negatives: %u\n", truePositives, trueNegatives, falsePositives, falseNegatives);
 }
 
@@ -333,6 +373,7 @@ static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThre
         }
     }
     // Walk over negative training samples, generate images and detect
+
     for (vector<string>::const_iterator negTrainingIterator = negFileNames.begin(); negTrainingIterator != negFileNames.end(); ++negTrainingIterator) {
         const Mat imageData = imread(*negTrainingIterator, IMREAD_GRAYSCALE);
         hog.detect(imageData, foundDetection, hitThreshold, winStride, trainingPadding);
@@ -353,11 +394,23 @@ static void detectTrainingSetTest(const HOGDescriptor& hog, const double hitThre
  * @param imageData
  */
 static void detectTest(const HOGDescriptor& hog, const double hitThreshold, Mat& imageData) {
-    vector<Rect> found;
+    vector<Rect> found_Vertical;
+    vector<Rect> found_Horizontal;
+    Mat imageData_rotated;
+    imageData_rotated=rotate(imageData,90);
     Size padding(Size(8, 8));
     Size winStride(Size(8, 8));
-    hog.detectMultiScale(imageData, found, hitThreshold, winStride, padding);
-    showDetections(found, imageData);
+    hog.detectMultiScale(imageData, found_Vertical, hitThreshold, winStride, padding);
+    hog.detectMultiScale(imageData_rotated,found_Horizontal, hitThreshold, winStride, padding);
+    if(found_Vertical.size()>0){
+        showDetections(found_Vertical, imageData);
+    }
+
+    if(found_Horizontal.size()){
+        imageData=rotate(imageData,90);
+        showDetections(found_Horizontal, imageData);
+        imageData=rotate(imageData,270);
+    } 
 }
 // </editor-fold>
 
@@ -479,7 +532,7 @@ int main(int argc, char** argv) {
 
     // <editor-fold defaultstate="collapsed" desc="Test detecting vector">
     // Detector detection tolerance threshold
-    const double hitThreshold = TRAINHOG_SVM_TO_TRAIN::getInstance()->getThreshold();
+    const double hitThreshold = TRAINHOG_SVM_TO_TRAIN::getInstance()->getThreshold() ;
     // Set our custom detecting vector
     hog.setSVMDetector(descriptorVector);
     hog.save(cvHOGFile);
